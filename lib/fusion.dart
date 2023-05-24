@@ -2,6 +2,48 @@
 import 'dart:convert';
 import 'dart:math';
 import 'fusion.pb.dart';
+import 'util.dart';
+import 'dart:typed_data';
+import 'package:fixnum/fixnum.dart';
+
+
+
+class Input {
+  List<int> prevTxid;
+  int prevIndex;
+  List<int> pubKey;
+  int amount;
+
+  Input({required this.prevTxid, required this.prevIndex, required this.pubKey, required this.amount});
+
+  int sizeOfInput() {
+    assert(1 < pubKey.length && pubKey.length < 76);  // need to assume regular push opcode
+    return 108 + pubKey.length;
+  }
+}
+
+class Address {
+  String addr="";
+
+  List<int>toScript() {
+    return [];
+  }
+}
+
+class Output {
+  int value;
+  Address addr;
+
+  Output({required this.value, required this.addr});
+
+  int sizeOfOutput() {
+    List<int> scriptpubkey = addr.toScript(); // assuming addr.toScript() returns List<int> that represents the scriptpubkey
+    assert(scriptpubkey.length < 253);  // need to assume 1-byte varint
+    return 9 + scriptpubkey.length;
+  }
+}
+
+
 
 // Class to handle fusion
 class Fusion {
@@ -81,48 +123,45 @@ static List<int>? randomOutputsForTier(Random rng, int inputAmount, int scale, i
 
 }
 
+static void genComponents(int numBlanks, List<Input> inputs, List<Output> outputs, int feerate) {
+  assert(numBlanks >= 0);
 
-static void genComponents() {
+  List<Tuple<Component, int>> components = [];
 
-/*
-WIP----
+  for (Input input in inputs) {
+    int fee = Util.componentFee(input.sizeOfInput(), feerate);
 
+    var comp = Component();
+    comp.input = InputComponent(
+        prevTxid: Uint8List.fromList(input.prevTxid.reversed.toList()),
+        prevIndex: input.prevIndex,
+        pubkey: input.pubKey,
+        amount: Int64(input.amount)
+    );
+    components.add(Tuple<Component, int>(comp, input.amount - fee));
+  }
 
-List<Component> components = [];
-for (var input in inputs.entries) {
-  var phash = input.key[0];
-  var pn = input.key[1];
-  var pubkey = input.value[0];
-  var value = input.value[1];
+  for (Output output in outputs) {
+    var script = output.addr.toScript(); // assuming addr.toScript() is a method that returns the scriptPubKey
+    int fee = Util.componentFee(output.sizeOfOutput(), feerate);
 
-  var fee = componentFee(sizeOfInput(pubkey), feerate);
+    var comp = Component();
+    comp.output = OutputComponent(
+        scriptpubkey: script,  // assuming script is a List<int>
+        amount: Int64(output.value)
+    );
+    components.add(Tuple<Component, int>(comp, -output.value - fee));
+  }
 
-  var comp = Component();
+  for (int i = 0; i < numBlanks; i++) {
+    var comp = Component();
+    comp.blank = BlankComponent();
+    components.add(Tuple<Component, int>(comp, 0));
+  }
 
-  // Assuming that phash and pubkey are hexadecimal strings.
-  comp.input.prevTxid = hex.decode(phash).reversed.toList();
-  comp.input.prevIndex = pn;
-  comp.input.pubkey = hex.decode(pubkey);
-  comp.input.amount = Int64(value);
-
-  components.add(comp);
+  // Rest of the function logic will be implemented later
+  return;
 }
-
-
-// WIP.  Inputs will be something like Map<List<String>, List<dynamic>> 
-// phash and pubkey are hexadecimal strings?
-// we also need helper funcionts   componentFee() and sizeOfInput()  
- //Int64 comes from the fixnum package, which we need to import.
-
-
-//---
-
-*/
-
-return;
-}
-
-
 
 
 

@@ -3,7 +3,22 @@ import 'package:pointycastle/ecc/api.dart';
 import 'dart:math';
 import 'dart:typed_data';
 
+class Tuple<T1, T2> {
+  final T1 item1;
+  final T2 item2;
+
+  Tuple(this.item1, this.item2);
+}
+
 class Util {
+
+  static int componentFee(int size, int feerate) {
+    // feerate in sat/kB
+    // size and feerate should both be integer
+    // fee is always rounded up
+    return ((size * feerate) + 999) ~/ 1000;
+  }
+
 
   static ECPoint ser_to_point(Uint8List serializedPoint, ECDomainParameters params) {
     var point = params.curve.decodePoint(serializedPoint);
