@@ -2,6 +2,7 @@
 import 'package:pointycastle/ecc/api.dart';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:crypto/crypto.dart' as crypto;
 
 class Tuple<T1, T2> {
   final T1 item1;
@@ -11,6 +12,58 @@ class Tuple<T1, T2> {
 }
 
 class Util {
+
+static Uint8List bigIntToBytes(BigInt bigInt) {
+    return Uint8List.fromList(bigInt.toRadixString(16).padLeft(32, '0').codeUnits);
+  }
+
+static Tuple<Uint8List, Uint8List> genKeypair() {
+  var params = ECDomainParameters('secp256k1');
+  var privKeyBigInt = _generatePrivateKey(params.n.bitLength);
+  var pubKeyPoint = params.G * privKeyBigInt;
+
+  if (pubKeyPoint == null) {
+    throw Exception("Error generating public key.");
+  }
+
+  Uint8List privKey = bigIntToBytes(privKeyBigInt);
+  Uint8List pubKey = pubKeyPoint.getEncoded(true);
+
+  return Tuple(privKey, pubKey);
+}
+
+
+
+// Generates a cryptographically secure private key
+  static BigInt _generatePrivateKey(int bitLength) {
+    final random = Random.secure();
+    var bytes = bitLength ~/ 8; // floor division
+    var remBit = bitLength % 8;
+
+    // Generate random BigInt
+    List<int> rnd = List<int>.generate(bytes, (_) => random.nextInt(256));
+    var rndBit = random.nextInt(1 << remBit);
+    rnd.add(rndBit);
+    var privateKey = BigInt.parse(rnd.map((x) => x.toRadixString(16).padLeft(2, '0')).join(), radix: 16);
+
+    return privateKey;
+  }
+
+  // Additional helper function to convert bytes to hex
+  static String bytesToHex(Uint8List bytes) {
+    return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+  }
+
+
+  static Uint8List sha256(Uint8List bytes) {
+    crypto.Digest digest = crypto.sha256.convert(bytes);
+    return Uint8List.fromList(digest.bytes);
+  }
+  static Uint8List tokenBytes([int nbytes = 32]) {
+    final Random _random = Random.secure();
+
+    return Uint8List.fromList(List<int>.generate(nbytes, (i) => _random.nextInt(256)));
+  }
 
   static int componentFee(int size, int feerate) {
     // feerate in sat/kB

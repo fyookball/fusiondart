@@ -5,6 +5,20 @@ import 'fusion.pb.dart';
 import 'util.dart';
 import 'dart:typed_data';
 import 'package:fixnum/fixnum.dart';
+import 'pedersen.dart';
+import 'package:crypto/crypto.dart';
+
+import "package:pointycastle/export.dart";
+
+class ComponentResult {
+  final Uint8List commitment;
+  final int counter;
+  final Uint8List component;
+  final Proof proof;
+  final Uint8List privateKey;
+
+  ComponentResult(this.commitment, this.counter, this.component, this.proof, this.privateKey);
+}
 
 
 
@@ -123,10 +137,21 @@ static List<int>? randomOutputsForTier(Random rng, int inputAmount, int scale, i
 
 }
 
-static void genComponents(int numBlanks, List<Input> inputs, List<Output> outputs, int feerate) {
+
+static List<ComponentResult> genComponents(int numBlanks, List<Input> inputs, List<Output> outputs, int feerate) {
   assert(numBlanks >= 0);
 
   List<Tuple<Component, int>> components = [];
+
+  // Set up Pedersen setup instance
+  Uint8List HBytes = Uint8List.fromList([0x02] + 'CashFusion gives us fungibility.'.codeUnits);
+  ECDomainParameters params = ECDomainParameters('secp256k1');
+  ECPoint? HMaybe = params.curve.decodePoint(HBytes);
+  if (HMaybe == null) {
+    throw Exception('Failed to decode point');
+  }
+  ECPoint H = HMaybe;
+  PedersenSetup setup = PedersenSetup(H);
 
   for (Input input in inputs) {
     int fee = Util.componentFee(input.sizeOfInput(), feerate);
@@ -142,12 +167,12 @@ static void genComponents(int numBlanks, List<Input> inputs, List<Output> output
   }
 
   for (Output output in outputs) {
-    var script = output.addr.toScript(); // assuming addr.toScript() is a method that returns the scriptPubKey
+    var script = output.addr.toScript();
     int fee = Util.componentFee(output.sizeOfOutput(), feerate);
 
     var comp = Component();
     comp.output = OutputComponent(
-        scriptpubkey: script,  // assuming script is a List<int>
+        scriptpubkey: script,
         amount: Int64(output.value)
     );
     components.add(Tuple<Component, int>(comp, -output.value - fee));
@@ -159,8 +184,45 @@ static void genComponents(int numBlanks, List<Input> inputs, List<Output> output
     components.add(Tuple<Component, int>(comp, 0));
   }
 
-  // Rest of the function logic will be implemented later
-  return;
+  List<ComponentResult> resultList = [];
+
+  components.asMap().forEach((cnum, Tuple<Component, int> componentTuple) {
+    Uint8List salt = Util.tokenBytes(32);
+    componentTuple.item1.saltCommitment = Util.sha256(salt);
+    var compser = componentTuple.item1.writeToBuffer();
+
+    Tuple<Uint8List, Uint8List> keyPair = Util.genKeypair();
+    Uint8List privateKey = keyPair.item1;
+    Uint8List pubKey = keyPair.item2;
+
+    Commitment commitmentInstance = setup.commit(BigInt.from(componentTuple.item2));
+    Uint8List amountCommitment = commitmentInstance.PUncompressed;
+
+
+// Convert BigInt nonce to Uint8List
+    Uint8List pedersenNonce = Uint8List.fromList([int.parse(commitmentInstance.nonce.toRadixString(16), radix: 16)]);
+
+// Generating initial commitment
+    InitialCommitment commitment = InitialCommitment(
+        saltedComponentHash: Util.sha256(Uint8List.fromList([...compser, ...salt])),
+        amountCommitment: amountCommitment,
+        communicationKey: pubKey
+    );
+
+    Uint8List commitser = commitment.writeToBuffer();
+
+    // Generating proof
+    Proof proof = Proof(
+        componentIdx: cnum,
+        salt: salt,
+        pedersenNonce: pedersenNonce
+    );
+
+    // Adding result to list
+    resultList.add(ComponentResult(commitser, cnum, compser, proof, privateKey));
+  });
+
+  return resultList;
 }
 
 

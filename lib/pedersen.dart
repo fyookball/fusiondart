@@ -46,6 +46,11 @@ class PedersenSetup {
 
   Uint8List get H => _H.getEncoded(false);
   Uint8List get HG => _HG.getEncoded(false);
+
+  Commitment commit(BigInt amount, {BigInt? nonce, Uint8List? PUncompressed}) {
+    return Commitment(this, amount, nonce: nonce, PUncompressed: PUncompressed);
+  }
+
 }
 
 class Commitment {
