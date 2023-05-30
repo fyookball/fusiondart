@@ -6,9 +6,21 @@ import 'util.dart';
 import 'dart:typed_data';
 import 'package:fixnum/fixnum.dart';
 import 'pedersen.dart';
+import 'dart:io';
 import 'package:crypto/crypto.dart';
+import 'dart:async';
+
 
 import "package:pointycastle/export.dart";
+import 'covert.dart';
+import 'connection.dart';
+
+class FusionError implements Exception {
+  final String message;
+  FusionError(this.message);
+  String toString() => "FusionError: $message";
+}
+
 
 class ComponentResult {
   final Uint8List commitment;
@@ -62,9 +74,212 @@ class Output {
 // Class to handle fusion
 class Fusion {
 
-static void foo() {
+  List<Input> coins = [];
+  List<Output> outputs =[];
+  bool server_connected_and_greeted = false;
+  bool stopping = false;
+  bool stopping_if_not_running = false;
+  String stopReason="";
+  String tor_host="";
+  String server_host ="";
+  bool server_ssl= false;
+  int server_port = 0;
+  int tor_port = 0;
+  int roundcount = 0;
+  String txid="";
+
+  Tuple<String, String> status = Tuple("", "");
+  Future<Socket>? connection = null;
+
+  Future<void> fusion_run() async {
+
+    try {
+
+      try {
+
+        // Check compatibility  - This was done in python version to see if fast libsec installed.
+        // For now , in dart, just pass this test.
+        ;
+      } on Exception catch(e) {
+        // handle exception, rethrow as a custom FusionError
+        throw FusionError("Incompatible: " + e.toString());
+      }
+
+      // Check if can connect to Tor proxy, if not, raise FusionError. Empty String treated as no host.
+      if (tor_host.isNotEmpty && tor_port != 0 && !is_tor_port(tor_host, tor_port)) {
+        throw FusionError("Can't connect to Tor proxy at $tor_host:$tor_port");
+      }
+      // Check stop condition
+     check_stop(running: false);
+
+      // Check coins
+      check_coins();
+
+      // Connect to server
+      status = Tuple("connecting", "");
+      try {
+        connection =  openConnection(server_host, server_port,
+            connTimeout: 5.0, defaultTimeout: 5.0, ssl: server_ssl);
+      } catch (e) {
+        print("Connect failed: $e");
+        String sslstr = server_ssl ? ' SSL ' : '';
+        throw FusionError('Could not connect to $sslstr$server_host:$server_port');
+      }
+
+
+      // Once connection is successful, wrap operations inside this block
+      // Within this block, version checks, downloads server params, handles coins and runs rounds
+      try {
+        // Version check and download server params.
+        greet();
+
+        server_connected_and_greeted = true;
+        notify_server_status(true);
+
+        // In principle we can hook a pause in here -- user can insert coins after seeing server params.
+
+        if (coins.isEmpty) {
+          throw FusionError('Started with no coins');
+        }
+        allocate_outputs();
+
+        // In principle we can hook a pause in here -- user can tweak tier_outputs, perhaps cancelling some unwanted tiers.
+
+        // Register for tiers, wait for a pool.
+        register_and_wait();
+
+        // launch the covert submitter
+        CovertSubmitter covert = await start_covert();
+        try {
+          // Pool started. Keep running rounds until fail or complete.
+          while (true) {
+            roundcount += 1;
+            if (await run_round(covert)) {
+              break;
+            }
+          }
+        } finally {
+          covert.stop();
+        }
+      } finally {
+        (await connection)?.close();
+      }
+
+      for (int i = 0; i < 60; i++) {
+        if (stopping) {
+          break; // not an error
+        }
+
+        if (Util.walletHasTransaction(txid)) {
+          break;
+        }
+
+        await Future.delayed(Duration(seconds: 1));
+      }
+
+      // Set status to 'complete' with 'time_wait'
+      status = Tuple('complete', 'txid: $txid');
+
+      // Wait for transaction to show up in wallets
+      // Set status to 'complete' with txid
+
+    } on FusionError catch(err) {
+      print('Failed: ${err}');
+      status.item1 = "failed";
+      status.item2 = err.toString();  // setting the error message
+    } catch(exc) {
+      print('Exception: ${exc}');
+      status.item1 = "failed";
+      status.item2= "Exception: ${exc.toString()}";  // setting the exception message
+    } finally {
+      clear_coins();
+      if (status.item1 != 'complete') {
+        for (var output in outputs) {
+          Util.unreserve_change_address(output.addr);
+        }
+        if (!server_connected_and_greeted) {
+          notify_server_status(false, tup: status);
+        }
+      }
+    }
+
+
+  }  // end fusion_run function.
+
+
+  void greet() {
+  }
+
+  void allocate_outputs() {
+  }
+
+  void register_and_wait() {
+  }
+
+  Future<CovertSubmitter> start_covert() async {
+    // Function implementation here...
+
+    // For now, just return a new instance of CovertSubmitter
+    return CovertSubmitter();
+  }
+
+
+  Future<bool> run_round(CovertSubmitter covert) async {
+    // function implementation here...
+
+    // placeholder return statement
+    return Future.value(false);
+  }
+
+  void notify_server_status(bool b, {Tuple? tup}) {
+    // Function implementation goes here
+  }
+
+
+  void stop([String reason = 'stopped', bool notIfRunning = false]) {
+    if (stopping) {
+      return;
+    }
+    if (notIfRunning) {
+      if (stopping_if_not_running) {
+        return;
+      }
+      stopReason = reason;
+      stopping_if_not_running = true;
+    } else {
+      stopReason = reason;
+      stopping = true;
+    }
+    // note the reason is only overwritten if we were not already stopping this way.
+  }
+
+  void check_stop({bool running = true}) {
+    // Gets called occasionally from fusion thread to allow a stop point.
+    if (stopping || (!running && stopping_if_not_running)) {
+      throw FusionError(stopReason ?? 'Unknown stop reason');
+    }
+  }
+
+void check_coins() {
+    // Implement by calling wallet layer to check the coins are ok.
+    return;
+}
+
+  static void foo() {
 print ("hello");
 }
+
+ void clear_coins() {
+    coins = [];
+ }
+
+  void addCoins(List<Input> newCoins) {
+    coins.addAll(newCoins);
+  }
+
+  void notify_coins_UI() {
+    return;
+  }
 
 static bool walletCanFuse() {
   return true;

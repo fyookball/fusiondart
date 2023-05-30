@@ -1,17 +1,36 @@
 
+import 'package:cashfusion/fusion.dart';
 import 'package:pointycastle/ecc/api.dart';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as crypto;
 
 class Tuple<T1, T2> {
-  final T1 item1;
-  final T2 item2;
+  T1 item1;
+  T2 item2;
 
   Tuple(this.item1, this.item2);
+
+  set setItem1(T1 value) {
+    this.item1 = value;
+  }
+
+  set setItem2(T2 value) {
+    this.item2 = value;
+  }
 }
 
 class Util {
+
+  static void unreserve_change_address(Address addr) {
+    //implement later based on wallet.
+    return;
+  }
+
+  static bool walletHasTransaction(String txid) {
+    // implement later based on wallet.
+    return true;
+  }
 
 static Uint8List bigIntToBytes(BigInt bigInt) {
     return Uint8List.fromList(bigInt.toRadixString(16).padLeft(32, '0').codeUnits);
