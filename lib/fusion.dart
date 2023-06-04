@@ -1,4 +1,5 @@
 
+import 'package:protobuf/protobuf.dart';
 import 'dart:convert';
 import 'dart:math';
 import 'fusion.pb.dart';
@@ -9,7 +10,8 @@ import 'pedersen.dart';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'dart:async';
-
+import 'comms.dart';
+import 'protocol.dart';
 
 import "package:pointycastle/export.dart";
 import 'covert.dart';
@@ -46,7 +48,12 @@ class Input {
     assert(1 < pubKey.length && pubKey.length < 76);  // need to assume regular push opcode
     return 108 + pubKey.length;
   }
+
+  int get value {
+    return amount;
+  }
 }
+
 
 class Address {
   String addr="";
@@ -88,8 +95,27 @@ class Fusion {
   int roundcount = 0;
   String txid="";
 
-  Tuple<String, String> status = Tuple("", "");
-  Future<Socket>? connection = null;
+    Tuple<String, String> status = Tuple("", "");
+  Connection? connection;
+
+  int numComponents =0;
+  double componentFeerate=0;
+  double minExcessFee=0;
+  double maxExcessFee=0;
+  List<int> availableTiers =[];
+
+  int maxOutputs=0;
+  int safety_sum_in =0;
+  Map<int, int> safety_exess_fees = {};
+
+
+  Map<int, List<int>> tierOutputs ={};
+
+  Future<void> initializeConnection(String host, int port) async {
+    Socket socket = await Socket.connect(host, port);
+    connection = Connection()..socket = socket;
+  }
+
 
   Future<void> fusion_run() async {
 
@@ -118,9 +144,9 @@ class Fusion {
       // Connect to server
       status = Tuple("connecting", "");
       try {
-        connection =  openConnection(server_host, server_port,
-            connTimeout: 5.0, defaultTimeout: 5.0, ssl: server_ssl);
-      } catch (e) {
+        Socket socket = await openConnection(server_host, server_port, connTimeout: 5.0, defaultTimeout: 5.0, ssl: server_ssl);
+        connection = Connection()..socket = socket;
+      }  catch (e) {
         print("Connect failed: $e");
         String sslstr = server_ssl ? ' SSL ' : '';
         throw FusionError('Could not connect to $sslstr$server_host:$server_port');
@@ -207,8 +233,6 @@ class Fusion {
   }  // end fusion_run function.
 
 
-  void greet() {
-  }
 
   void allocate_outputs() {
   }
@@ -439,6 +463,127 @@ static List<ComponentResult> genComponents(int numBlanks, List<Input> inputs, Li
 
   return resultList;
 }
+
+  Future<GeneratedMessage> recv(List<String> expectedMsgNames, {Duration? timeout}) async {
+    if (connection == null) {
+      throw FusionError('Connection not initialized');
+    }
+
+    var result = await recvPb(
+        connection!,
+        ServerMessage,  // this is the changed line
+        expectedMsgNames,
+        timeout: timeout
+    );
+
+    var submsg = result.item1;
+    var mtype = result.item2;
+
+    if (mtype == 'error') {
+      throw FusionError('server error: ${submsg.toString()}');
+    }
+
+    return submsg;
+  }
+
+  void send(GeneratedMessage submsg, {Duration? timeout}) {
+    send_pb(connection!, submsg, timeout: timeout);
+  }
+
+  void greet() async {
+    print('greeting server');
+    send(ClientHello(version: utf8.encode(Protocol.VERSION), genesisHash: Util.get_current_genesis_hash()));
+    ServerHello reply = await recv(['serverhello']) as ServerHello;
+
+    numComponents = reply.numComponents;
+    componentFeerate = reply.componentFeerate.toDouble();
+    minExcessFee = reply.minExcessFee.toDouble();
+    maxExcessFee = reply.maxExcessFee.toDouble();
+    availableTiers = List<int>.from(reply.tiers);
+
+    // Enforce some sensible limits, in case server is crazy
+    if (componentFeerate > Protocol.MAX_COMPONENT_FEERATE) {
+      throw FusionError('excessive component feerate from server');
+    }
+    if (minExcessFee > 400) { // note this threshold should be far below MAX_EXCESS_FEE
+      throw FusionError('excessive min excess fee from server');
+    }
+    if (minExcessFee > maxExcessFee) {
+      throw FusionError('bad config on server: fees');
+    }
+    if (numComponents < Protocol.MIN_TX_COMPONENTS * 1.5) {
+      throw FusionError('bad config on server: num_components');
+    }
+  }
+
+  void allocateOutputs() {
+    assert(['setup', 'connecting'].contains(status.item1));
+
+    List<Input> inputs = coins;
+    int numInputs = inputs.length;
+
+    int maxComponents = min(numComponents, Protocol.MAX_COMPONENTS);
+    int maxOutputs = maxComponents - numInputs;
+    if (maxOutputs < 1) {
+      throw FusionError('Too many inputs ($numInputs >= $maxComponents)');
+    }
+
+    if (maxOutputs != null) {
+      assert(maxOutputs >= 1);
+      maxOutputs = min(maxOutputs, maxOutputs);
+    }
+
+    int numDistinct = inputs.map((e) => e.value).toSet().length;
+    int minOutputs = max(Protocol.MIN_TX_COMPONENTS - numDistinct, 1);
+    if (maxOutputs < minOutputs) {
+      throw FusionError('Too few distinct inputs selected ($numDistinct); cannot satisfy output count constraint (>= $minOutputs, <= $maxOutputs)');
+    }
+
+    int sumInputsValue = inputs.map((e) => e.value).reduce((a, b) => a + b);
+    int inputFees = inputs.map((e) => Util.componentFee(e.sizeOfInput(), componentFeerate.toInt())).reduce((a, b) => a + b);
+    int availForOutputs = sumInputsValue - inputFees - minExcessFee.toInt();
+
+    int feePerOutput = Util.componentFee(34, componentFeerate.toInt());
+
+    int offsetPerOutput = Protocol.MIN_OUTPUT + feePerOutput;
+
+    if (availForOutputs < offsetPerOutput) {
+      throw FusionError('Selected inputs had too little value');
+    }
+
+    var rng = Random();
+    var seed = List<int>.generate(32, (_) => rng.nextInt(256));
+
+    tierOutputs = {};
+    var excessFees = <int, int>{};
+    for (var scale in availableTiers) {
+      int fuzzFeeMax = scale ~/ 1000000;
+      int fuzzFeeMaxReduced = min(fuzzFeeMax, min(Protocol.MAX_EXCESS_FEE - minExcessFee.toInt(), maxExcessFee.toInt()));
+
+      assert(fuzzFeeMaxReduced >= 0);
+      int fuzzFee = rng.nextInt(fuzzFeeMaxReduced + 1);
+
+      int reducedAvailForOutputs = availForOutputs - fuzzFee;
+      if (reducedAvailForOutputs < offsetPerOutput) {
+        continue;
+      }
+
+      var outputs = randomOutputsForTier(rng, reducedAvailForOutputs, scale, offsetPerOutput, maxOutputs);
+      if (outputs == null || outputs.length < minOutputs) {
+        continue;
+      }
+      outputs = outputs.map((o) => o - feePerOutput).toList();
+
+      assert(inputs.length + (outputs?.length ?? 0) <= Protocol.MAX_COMPONENTS);
+      excessFees[scale] = sumInputsValue - inputFees - reducedAvailForOutputs;
+      tierOutputs[scale] = outputs!;
+    }
+
+    print('Possible tiers: $tierOutputs');
+
+    safety_sum_in = sumInputsValue;
+    safety_exess_fees = excessFees;
+  }
 
 
 

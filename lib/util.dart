@@ -22,6 +22,11 @@ class Tuple<T1, T2> {
 
 class Util {
 
+
+  static Uint8List get_current_genesis_hash() {
+    return Uint8List.fromList(List.filled(32, 0));
+  }
+
   static void unreserve_change_address(Address addr) {
     //implement later based on wallet.
     return;
