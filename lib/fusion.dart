@@ -12,6 +12,7 @@ import 'package:crypto/crypto.dart';
 import 'dart:async';
 import 'comms.dart';
 import 'protocol.dart';
+import 'package:fixnum/fixnum.dart'; // so int and intt64 can be combined in some protobuff code
 
 import "package:pointycastle/export.dart";
 import 'covert.dart';
@@ -55,13 +56,6 @@ class Input {
 }
 
 
-class Address {
-  String addr="";
-
-  List<int>toScript() {
-    return [];
-  }
-}
 
 class Output {
   int value;
@@ -107,14 +101,29 @@ class Fusion {
   int maxOutputs=0;
   int safety_sum_in =0;
   Map<int, int> safety_exess_fees = {};
+  Map<int, List<int>> tierOutputs ={};  // not sure if this should be using outputs class.
+
+  int inactiveTimeLimit = 0;
+  int tier = 0;
+  int covertPort = 0;
+  bool covertSSL = false;
+  double beginTime = 0.0; //  represent time in seconds.
+  List<int> lastHash = <int>[];
+  List<Address> reservedAddresses = <Address>[];
+  int safetyExcessFee = 0;
+  Stopwatch t_fusionBegin = Stopwatch();
+  Uint8List covertDomainB = Uint8List(0);
 
 
-  Map<int, List<int>> tierOutputs ={};
+  /*
 
+  WRITTEN ON INITIAL CONVERSTION PROCRESS BUT NOT NEEDED??
   Future<void> initializeConnection(String host, int port) async {
     Socket socket = await Socket.connect(host, port);
     connection = Connection()..socket = socket;
   }
+
+   */
 
 
   Future<void> fusion_run() async {
@@ -132,7 +141,7 @@ class Fusion {
       }
 
       // Check if can connect to Tor proxy, if not, raise FusionError. Empty String treated as no host.
-      if (tor_host.isNotEmpty && tor_port != 0 && !is_tor_port(tor_host, tor_port)) {
+      if (tor_host.isNotEmpty && tor_port != 0 && !await isTorPort(tor_host, tor_port)) {
         throw FusionError("Can't connect to Tor proxy at $tor_host:$tor_port");
       }
       // Check stop condition
@@ -144,8 +153,8 @@ class Fusion {
       // Connect to server
       status = Tuple("connecting", "");
       try {
-        Socket socket = await openConnection(server_host, server_port, connTimeout: 5.0, defaultTimeout: 5.0, ssl: server_ssl);
-        connection = Connection()..socket = socket;
+        Connection connection = await openConnection(server_host, server_port, connTimeout: 5.0, defaultTimeout: 5.0, ssl: server_ssl);
+
       }  catch (e) {
         print("Connect failed: $e");
         String sslstr = server_ssl ? ' SSL ' : '';
@@ -244,7 +253,7 @@ class Fusion {
     // Function implementation here...
 
     // For now, just return a new instance of CovertSubmitter
-    return CovertSubmitter();
+    return CovertSubmitter("dummy",0,true,"some_host",0,0,0,0);
   }
 
 
@@ -486,9 +495,12 @@ static List<ComponentResult> genComponents(int numBlanks, List<Input> inputs, Li
     return submsg;
   }
 
-  void send(GeneratedMessage submsg, {Duration? timeout}) {
-    send_pb(connection!, submsg, timeout: timeout);
+
+  Future<void> send(GeneratedMessage submsg, {Duration? timeout}) async {
+    await sendPb(connection!, ClientMessage, submsg, timeout: timeout);
   }
+
+
 
   void greet() async {
     print('greeting server');
@@ -584,8 +596,198 @@ static List<ComponentResult> genComponents(int numBlanks, List<Input> inputs, Li
     safety_sum_in = sumInputsValue;
     safety_exess_fees = excessFees;
   }
+  Future<void> registerAndWait() async {
+
+    // msg can be different classes depending on which protobuf msg is sent.
+    dynamic? msg;
+
+    var tierOutputs = this.tierOutputs;
+    var tiersSorted = tierOutputs.keys.toList()..sort();
+
+    if (tierOutputs.isEmpty) {
+      throw FusionError('No outputs available at any tier (selected inputs were too small / too large).');
+    }
+
+    print('registering for tiers: $tiersSorted');
+
+    int self_fuse = 1;  // Temporary value for now
+    var cashfusionTag = [1];// temp value for now
 
 
+    var tags = [JoinPools_PoolTag(id: cashfusionTag, limit: self_fuse)];
+
+    check_stop(running: false);
+    check_coins();
+    send(JoinPools(tiers: tiersSorted.map((i) => Int64(i)).toList(), tags: tags));
+
+
+    status = Tuple<String, String>('waiting', 'Registered for tiers');
+
+    var tiersStrings = {for (var entry in tierOutputs.entries) entry.key: (entry.key * 1e-8).toStringAsFixed(8).replaceAll(RegExp(r'0+$'), '')};
+
+    while (true) {
+      var msg = await recv(['tierstatusupdate', 'fusionbegin'], timeout: Duration(seconds: 10));
+
+      if (msg is FusionBegin) {
+        break;
+      }
+
+      check_stop(running: false);
+      check_coins();
+
+      assert(msg is TierStatusUpdate);
+
+      late var statuses;
+      if (msg is TierStatusUpdate) {
+         statuses = msg.statuses;
+      }
+
+      double maxfraction = 0.0;
+      var maxtiers = <int>[];
+      int? besttime;
+      int? besttimetier;
+      for (var entry in statuses.entries) {
+        double frac = entry.value.players / entry.value.min_players;
+        if (frac >= maxfraction) {
+          if (frac > maxfraction) {
+            maxfraction = frac;
+            maxtiers.clear();
+          }
+          maxtiers.add(entry.key);
+        }
+        if (entry.value.hasField('time_remaining')) {
+          int tr = entry.value.time_remaining;
+          if (besttime == null || tr < besttime) {
+            besttime = tr;
+            besttimetier = entry.key;
+          }
+        }
+      }
+
+      var displayBest = <String>[];
+      var displayMid = <String>[];
+      var displayQueued = <String>[];
+      for (var tier in tiersSorted) {
+        if (statuses.containsKey(tier)) {
+          var tierStr = tiersStrings[tier];
+          if (tierStr == null) {
+            throw FusionError('server reported status on tier we are not registered for');
+          }
+          if (tier == besttimetier) {
+            displayBest.insert(0, '**$tierStr**');
+          } else if (maxtiers.contains(tier)) {
+            displayBest.add('[$tierStr]');
+          } else {
+            displayMid.add(tierStr);
+          }
+        } else {
+          displayQueued.add(tiersStrings[tier]!);
+        }
+      }
+
+      var parts = <String>[];
+      if (displayBest.isNotEmpty || displayMid.isNotEmpty) {
+        parts.add("Tiers: ${displayBest.join(', ')} ${displayMid.join(', ')}");
+      }
+      if (displayQueued.isNotEmpty) {
+        parts.add("Queued: ${displayQueued.join(', ')}");
+      }
+      var tiersString = parts.join(' ');
+
+      if (besttime == null && inactiveTimeLimit != null) {
+        if (DateTime.now().millisecondsSinceEpoch > inactiveTimeLimit) {
+          throw FusionError('stopping due to inactivity');
+        }
+      }
+
+      if (besttime != null) {
+        status = Tuple<String, String>('waiting', 'Starting in ${besttime}s. $tiersString');
+      } else if (maxfraction >= 1) {
+        status = Tuple<String, String>('waiting', 'Starting soon. $tiersString');
+      } else if (displayBest.isNotEmpty || displayMid.isNotEmpty) {
+        status = Tuple<String, String>('waiting', '${(maxfraction * 100).round()}% full. $tiersString');
+      } else {
+        status = Tuple<String, String>('waiting', tiersString);
+      }
+    }
+
+    assert(msg is FusionBegin);
+    t_fusionBegin = Stopwatch()..start();
+
+    var clockMismatch = msg.serverTime - DateTime.now().millisecondsSinceEpoch / 1000;
+    if (clockMismatch.abs() > Protocol.MAX_CLOCK_DISCREPANCY) {
+      throw FusionError("Clock mismatch too large: ${clockMismatch.toStringAsFixed(3)}.");
+    }
+
+    tier = msg.tier;
+    if (msg is FusionBegin) {
+      covertDomainB = Uint8List.fromList(msg.covertDomain);
+    }
+
+    covertPort = msg.covertPort;
+    covertSSL = msg.covertSSL;
+    beginTime = msg.serverTime;
+
+    lastHash =   Util.calcInitialHash(tier, covertDomainB, covertPort, covertSSL, beginTime);
+
+    var outAmounts = tierOutputs[tier];
+    var outAddrs = Util.reserve_change_addresses(outAmounts?.length ?? 0);
+
+    reservedAddresses = outAddrs;
+    outputs = Util.zip(outAmounts ?? [], outAddrs).map((pair) => Output(value: pair[0], addr: pair[1])).toList();
+
+    safetyExcessFee = safety_exess_fees[tier] ?? 0;
+
+    print("starting fusion rounds at tier $tier: ${coins.length} inputs and ${outputs.length} outputs");
+  }
+
+  /*
+  Future<CovertSubmitter> startCovert() async {
+    status = ['running', 'Setting up Tor connections'];
+    String covertDomain;
+    try {
+      covertDomain = utf8.decode(covertDomainB);
+    } catch (e) {
+      throw FusionError('badly encoded covert domain');
+    }
+    CovertSubmitter covert = CovertSubmitter(
+        covertDomain,
+        covertPort,
+        covertSSL,
+        torHost,
+        torPort,
+        numComponents,
+        Protocol.COVERT_SUBMIT_WINDOW,
+        Protocol.COVERT_SUBMIT_TIMEOUT
+    );
+    try {
+      covert.scheduleConnections(
+          tFusionbegin,
+          Protocol.COVERT_CONNECT_WINDOW,
+          Protocol.COVERT_CONNECT_SPARES,
+          Protocol.COVERT_CONNECT_TIMEOUT
+      );
+
+      // loop until a just a bit before we're expecting startRound, watching for status updates
+      final tend = tFusionbegin + (Protocol.WARMUP_TIME - Protocol.WARMUP_SLOP - 1);
+      while (DateTime.now().millisecondsSinceEpoch / 1000 < tend) {
+        int numConnected = covert.slots.where((s) => s.covconn.connection != null).length;
+        int numSpareConnected = covert.spareConnections.where((c) => c.connection != null).length;
+        status = ['running', 'Setting up Tor connections ($numConnected+$numSpareConnected out of $numComponents)'];
+        await Future.delayed(Duration(seconds: 1));
+
+        covert.checkOk();
+        this.checkStop();
+        this.checkCoins();
+      }
+    } catch (e) {
+      covert.stop();
+      rethrow;
+    }
+
+    return covert;
+  }
+*/
 
 } //  END OF CLASS
 

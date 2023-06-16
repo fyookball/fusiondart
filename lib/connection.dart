@@ -21,14 +21,28 @@ class BadFrameError extends Error {
   String toString() => message;
 }
 
-Future<Socket> openConnection(String host, int port,
+Future<Connection> openConnection(String host, int port,
     {double connTimeout = 5.0,
       double defaultTimeout = 5.0,
       bool ssl = false,
       dynamic socksOpts}) async {
-  // Replace this with actual implementation later.
-  return Future.error('openConnection not implemented yet');
+
+  try {
+    // Dart's Socket class handles connection timeout internally.
+    Socket socket = await Socket.connect(host, port);
+
+    if (ssl) {
+      // We can use SecureSocket.secure to upgrade socket connection to SSL/TLS.
+      socket = await SecureSocket.secure(socket);
+    }
+
+    return Connection(socket: socket, timeout: Duration(seconds: defaultTimeout.toInt()));
+
+  } catch (e) {
+    throw 'Failed to open connection: $e';
+  }
 }
+
 
 class Connection {
   Duration timeout = Duration(seconds: 1);
@@ -36,6 +50,8 @@ class Connection {
 
   static const int MAX_MSG_LENGTH = 200*1024;
   static final Uint8List magic = Uint8List.fromList([0x76, 0x5b, 0xe8, 0xb4, 0xe4, 0x39, 0x6d, 0xcf]);
+  final Uint8List recvbuf = Uint8List(0);
+  Connection({required this.socket, this.timeout = const Duration(seconds: 1)});
 
   Future<void> sendMessage(List<int> msg, {Duration? timeout}) async {
     timeout ??= this.timeout;

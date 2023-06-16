@@ -15,8 +15,12 @@ Map<Type, PbCreateFunc> pbClassCreators = {
 };
 
 
-Future<void> send_pb(Connection connection, GeneratedMessage msg, {Duration? timeout}) async {
-  final msgBytes = msg.writeToBuffer();
+
+Future<void> sendPb(Connection connection, Type pbClass, GeneratedMessage subMsg, {Duration? timeout}) async {
+  // Construct the outer message with the submessage.
+  var pbMessage = pbClassCreators[pbClass]!()..mergeFromMessage(subMsg);
+  final msgBytes = pbMessage.writeToBuffer();
+
   try {
     await connection.sendMessage(msgBytes, timeout: timeout);
   } on SocketException {
@@ -27,6 +31,8 @@ Future<void> send_pb(Connection connection, GeneratedMessage msg, {Duration? tim
     throw FusionError('Communications error: ${e.runtimeType}: $e');
   }
 }
+
+
 
 
 Future<Tuple<GeneratedMessage, String>> recvPb(Connection connection, Type pbClass, List<String> expectedFieldNames, {Duration? timeout}) async {

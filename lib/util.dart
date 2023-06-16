@@ -3,7 +3,18 @@ import 'package:cashfusion/fusion.dart';
 import 'package:pointycastle/ecc/api.dart';
 import 'dart:math';
 import 'dart:typed_data';
+import 'dart:convert';
 import 'package:crypto/crypto.dart' as crypto;
+import 'protocol.dart';
+import 'dart:convert';
+
+class Address {
+  String addr="";
+
+  List<int>toScript() {
+    return [];
+  }
+}
 
 class Tuple<T1, T2> {
   T1 item1;
@@ -22,14 +33,53 @@ class Tuple<T1, T2> {
 
 class Util {
 
+static List<List<T>> zip<T>(List<T> list1, List<T> list2) {
+    int length = min(list1.length, list2.length);
+    return List<List<T>>.generate(length, (i) => [list1[i], list2[i]]);
+  }
+
+
+  static List<int> calcInitialHash(int tier, Uint8List covertDomainB, int covertPort, bool covertSsl, double beginTime) {
+    // Converting int to bytes in BigEndian order
+    var tierBytes = ByteData(8)..setInt64(0, tier, Endian.big);
+    var covertPortBytes = ByteData(4)..setInt32(0, covertPort, Endian.big);
+    var beginTimeBytes = ByteData(8)..setInt64(0, beginTime.toInt(), Endian.big);
+
+    // Define constants
+    const version = Protocol.VERSION;
+    const cashFusionSession = "Cash Fusion Session";
+
+    // Creating the list of bytes
+    List<int> elements = [];
+    elements.addAll(utf8.encode(cashFusionSession));
+    elements.addAll(utf8.encode(version));
+    elements.addAll(tierBytes.buffer.asInt8List());
+    elements.addAll(covertDomainB);
+    elements.addAll(covertPortBytes.buffer.asInt8List());
+    elements.add(covertSsl ? 1 : 0);
+    elements.addAll(beginTimeBytes.buffer.asInt8List());
+
+    // Hashing the concatenated elements
+    var digest = crypto.sha256.convert(elements);
+
+    return digest.bytes;
+  }
+
+
 
   static Uint8List get_current_genesis_hash() {
     return Uint8List.fromList(List.filled(32, 0));
   }
 
-  static void unreserve_change_address(Address addr) {
+  static List<Address> unreserve_change_address(Address addr) {
     //implement later based on wallet.
-    return;
+    return [];
+  }
+
+
+  static List<Address> reserve_change_addresses(int number_addresses) {
+    //implement later based on wallet.
+    return [];
   }
 
   static bool walletHasTransaction(String txid) {
