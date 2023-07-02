@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'fusion.dart';
 import 'pedersen.dart';
+import 'encrypt.dart';
+import 'validation.dart';
 
 void main() {
 

@@ -3,6 +3,9 @@ import 'util.dart';
 import 'dart:math';
 import 'dart:typed_data';
 
+ECDomainParameters getDefaultParams() {
+  return ECDomainParameters("secp256k1");
+}
 
 class NullPointError implements Exception {
   String errMsg() => 'NullPointError: Either Hpoint or HGpoint is null.';
@@ -120,7 +123,8 @@ class Commitment {
     PUncompressed = Ppoint?.getEncoded(false) ?? Uint8List(0);
   }
 
-  static Uint8List add_points(Iterable<Uint8List> pointsIterable, ECDomainParameters params) {
+  static Uint8List add_points(Iterable<Uint8List> pointsIterable) {
+    ECDomainParameters params = getDefaultParams(); // Using helper function here
     var pointList = pointsIterable.map((pser) => Util.ser_to_point(pser, params)).toList();
 
     if (pointList.isEmpty) {
@@ -139,6 +143,7 @@ class Commitment {
 
     return Util.point_to_ser(pSum, false);
   }
+
 
   Commitment addCommitments(Iterable<Commitment> commitmentIterable) {
     BigInt ktotal = BigInt.zero; // Changed to BigInt from int
@@ -170,7 +175,7 @@ class Commitment {
     Uint8List? PUncompressed;
     if (points.length < 512) {
       try {
-        PUncompressed = add_points(points, setup.params);
+        PUncompressed = add_points(points);
       } on Exception {
         PUncompressed = null;
       }

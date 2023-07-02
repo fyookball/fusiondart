@@ -146,7 +146,7 @@ class CovertSlot {
     }
     done = true;
     t_submit = DateTime.fromMillisecondsSinceEpoch(0);
-    covConn?.tPing = DateTime.fromMillisecondsSinceEpoch(0); // if a submission is done, no ping is needed. Assuming tPing is a timestamp, 0 could signify no value
+    covConn?.tPing = DateTime.fromMillisecondsSinceEpoch(0); // if a submission is done, no ping is needed.
   }
 
 
@@ -166,7 +166,6 @@ class CovertSubmitter extends PrintError {
   List<CovertSlot> slots;
   bool done = true;
   String failure_exception= "";
-  int submit_timeout;
   int num_slots;
 
   bool stopping = false;
@@ -184,6 +183,7 @@ class CovertSubmitter extends PrintError {
   DateTime? stopTStart;
   List<CovertConnection> spareConnections= [];
   String? failureException;
+  int submit_timeout=0;
 
   CovertSubmitter(
       String dest_addr,
@@ -192,12 +192,13 @@ class CovertSubmitter extends PrintError {
       String tor_host,
       int tor_port,
       this.num_slots,
-      int randSpan,
-      this.submit_timeout)
-      : slots = List<CovertSlot>.generate(num_slots, (index) => CovertSlot(submit_timeout)) {
+      double randSpan, // changed from int to double
+      double submit_timeout) // changed from int to double
+      : slots = List<CovertSlot>.generate(num_slots, (index) => CovertSlot(submit_timeout.toInt())) {
 
     // constructor body...
   }
+
 
   void wakeAll() {
     for (var s in slots) {
@@ -475,7 +476,7 @@ class CovertSubmitter extends PrintError {
     this.checkOk();
     var numMissing = this.slots
         .where((s) => s.covConn?.connection == null)
-        .length; // assuming slots and covconn.connection are declared as properties in the class
+        .length;
     if (numMissing > 0) {
       throw FusionError(
           "Covert connections were too slow ($numMissing incomplete out of ${this
@@ -488,7 +489,7 @@ class CovertSubmitter extends PrintError {
     this.checkOk();
     var numMissing = this.slots
         .where((s) => !s.done)
-        .length; // assuming slots and done are declared as properties in the class
+        .length;
     if (numMissing > 0) {
       throw FusionError(
           "Covert submissions were too slow ($numMissing incomplete out of ${this

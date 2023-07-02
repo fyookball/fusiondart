@@ -6,15 +6,32 @@ import 'dart:typed_data';
 import 'dart:convert';
 import 'package:crypto/crypto.dart' as crypto;
 import 'protocol.dart';
+import 'fusion.pb.dart';
 import 'dart:convert';
 
 class Address {
-  String addr="";
+  String addr = "";
 
-  List<int>toScript() {
+  Address({required this.addr}); // Constructor updated to accept addr as a named parameter
+
+  Address._create({required this.addr});
+
+  static Address fromScriptPubKey(List<int> scriptPubKey) {
+    // This is just a placeholder code
+    String addr = "";  // This should be computed from the scriptPubKey
+    return Address(addr: addr);
+  }
+
+  // Public constructor for testing
+  static Address fromString(String address) {
+    return Address._create(addr: address);
+  }
+
+  List<int> toScript() {
     return [];
   }
 }
+
 
 class Tuple<T1, T2> {
   T1 item1;
@@ -32,6 +49,73 @@ class Tuple<T1, T2> {
 }
 
 class Util {
+
+  static void checkInputElectrumX(InputComponent inputComponent) {
+    //  Implementation needed here
+    //
+    }
+
+
+  static int randPosition(Uint8List seed, int numPositions, int counter) {
+    // counter to bytes
+    var counterBytes = Uint8List(4);
+    var counterByteData = ByteData.sublistView(counterBytes);
+    counterByteData.setInt32(0, counter, Endian.big);
+
+    // hash the seed and counter
+    var digest = crypto.sha256.convert([...seed, ...counterBytes]);
+
+    // take the first 8 bytes
+    var first8Bytes = digest.bytes.take(8).toList();
+    var int64 = ByteData.sublistView(Uint8List.fromList(first8Bytes)).getUint64(0, Endian.big);
+
+    // perform the modulo operation
+    return ((int64 * numPositions) >> 64).toInt();
+  }
+
+  static List<String> pubkeysFromPrivkey(String privkey) {
+    // This is a placeholder implementation.
+    return ['public_key1_dummy', 'public_key2_dummy'];
+  }
+
+  static int dustLimit(int length) {
+    // This is a dummy implementation.
+    return 500;
+  }
+
+
+  static Address getAddressFromOutputScript(Uint8List scriptpubkey) {
+    // Dummy implementation...
+
+    // Throw exception if this is not a standard P2PKH address!
+
+    return Address.fromString('dummy_address');
+  }
+
+
+  static bool schnorrVerify(ECPoint pubkey, List<int> signature, Uint8List messageHash) {
+    // Implementation needed: actual Schnorr signature verification
+    return true;
+  }
+
+
+  static String formatSatoshis(sats, {int numZeros=8}) {
+    // To implement
+    return "";
+  }
+  static void updateWalletLabel(String txid, String label) {
+
+    // Call the wallet layer.
+  }
+
+ static Uint8List getRandomBytes(int length) {
+    final rand = Random.secure();
+    final bytes = Uint8List(length);
+    for (int i = 0; i < length; i++) {
+      bytes[i] = rand.nextInt(256);
+    }
+    return bytes;
+  }
 
 static List<List<T>> zip<T>(List<T> list1, List<T> list2) {
     int length = min(list1.length, list2.length);
@@ -65,6 +149,28 @@ static List<List<T>> zip<T>(List<T> list1, List<T> list2) {
     return digest.bytes;
   }
 
+static List<int> calcRoundHash(List<int> lastHash, List<int> roundPubkey, int roundTime, List<List<int>> allCommitments, List<List<int>> allComponents) {
+  return listHash([
+    utf8.encode('Cash Fusion Round'),
+    lastHash,
+    roundPubkey,
+    bigIntToBytes(BigInt.from(roundTime)),
+    listHash(allCommitments),
+    listHash(allComponents),
+  ]);
+}
+
+  static List<int> listHash(Iterable<List<int>> iterable) {
+    var bytes = <int>[];
+
+    for (var x in iterable) {
+      var length = ByteData(4)..setUint32(0, x.length, Endian.big);
+      bytes.addAll(length.buffer.asUint8List());
+      bytes.addAll(x);
+    }
+    return crypto.sha256.convert(bytes).bytes;
+
+  }
 
 
   static Uint8List get_current_genesis_hash() {
@@ -126,6 +232,11 @@ static Tuple<Uint8List, Uint8List> genKeypair() {
   // Additional helper function to convert bytes to hex
   static String bytesToHex(Uint8List bytes) {
     return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  static BigInt bytesToBigInt(Uint8List bytes) {
+    String hexString = bytesToHex(bytes);
+    return BigInt.parse(hexString, radix: 16);
   }
 
 
